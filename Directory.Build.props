@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>$(Version)</AssemblyVersion>
+    <FileVersion>$(Version)</FileVersion>
+    <Copyright>Copyright (c) 2026 Kacper Harabasz</Copyright>
+    <Authors>Kacper Harabasz</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/kharabasz/testcontainers-ministack-dotnet</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/kharabasz/testcontainers-ministack-dotnet</RepositoryUrl>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <PropertyGroup>
+    <NoWarn>CA1859,CA1861,CS0618,CS1591,xUnit1044,xUnit1045</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <GlobalPackageReference Include="SauceControl.InheritDoc" Version="2.0.2"/>
+  </ItemGroup>
+</Project>
