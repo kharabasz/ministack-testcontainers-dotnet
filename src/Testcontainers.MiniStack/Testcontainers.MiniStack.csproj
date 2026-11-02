@@ -2,7 +2,7 @@
     <PropertyGroup>
         <TargetFrameworks>net8.0;net9.0;net10.0;netstandard2.0;netstandard2.1</TargetFrameworks>
         <LangVersion>latest</LangVersion>
-        <PackageId>Testcontainers.MiniStack.Community</PackageId>
+        <PackageId>MiniStack.Testcontainers</PackageId>
         <Description>Community Testcontainers for .NET module for MiniStack, a free AWS emulator. Not affiliated with the Testcontainers project.</Description>
         <PackageTags>aws;ministack;docker;dotnet;testcontainers;testing</PackageTags>
     </PropertyGroup>

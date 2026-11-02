@@ -1,4 +1,4 @@
-# Testcontainers.MiniStack.Community
+# MiniStack.Testcontainers
 
 A [Testcontainers for .NET](https://dotnet.testcontainers.org/) module for [MiniStack](https://github.com/ministackorg/ministack), a free, open-source AWS emulator that serves its AWS services on a single port (4566).
 
@@ -7,7 +7,7 @@ This is a community package. It is not affiliated with or maintained by the Test
 ## Install
 
 ```shell
-dotnet add package Testcontainers.MiniStack.Community
+dotnet add package MiniStack.Testcontainers
 ```
 
 The package targets `net8.0`, `net9.0`, `net10.0`, `netstandard2.0` and `netstandard2.1`, and depends on the [`Testcontainers`](https://www.nuget.org/packages/Testcontainers) package. The types live in the `Testcontainers.MiniStack` namespace.
