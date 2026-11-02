@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -23,6 +24,9 @@ jobs:
       - run: dotnet build -c Release -p:Version=$VERSION
       - run: dotnet test -c Release --no-build
       - run: dotnet pack src/Testcontainers.MiniStack -c Release --no-build -p:Version=$VERSION -o artifacts
-      - run: dotnet nuget push "artifacts/*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      # Trusted publishing: exchanges the GitHub OIDC token for a short-lived nuget.org API key.
+      - uses: NuGet/login@v1
+        id: login
+        with:
+          user: kharabasz
+      - run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

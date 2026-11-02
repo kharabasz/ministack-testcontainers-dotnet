@@ -106,7 +106,7 @@ The tests start real MiniStack containers, so they need a running Docker daemon.
 
 ## Releasing
 
-Push a tag `v<version>`, e.g. `v1.0.1`. The `release` workflow builds, tests, packs with that version and pushes to nuget.org with the `NUGET_API_KEY` repository secret.
+Push a tag `v<version>`, e.g. `v1.0.1`. The `release` workflow builds, tests, packs with that version and pushes to nuget.org through trusted publishing (a nuget.org policy for this repo and `release.yml`).
 
 ## License
 
