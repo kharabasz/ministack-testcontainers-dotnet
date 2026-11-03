@@ -183,6 +183,44 @@ public sealed class MiniStackBuilder : ContainerBuilder<MiniStackBuilder, MiniSt
     }
 
     /// <summary>
+    /// Sets whether starting the container removes the nested containers and volumes
+    /// that removed MiniStack containers left behind.
+    /// </summary>
+    /// <remarks>
+    /// Enabled by default, and runs only with <see cref="WithRealInfrastructure" />. When the
+    /// test host is killed, the Resource Reaper removes MiniStack, but not the containers
+    /// MiniStack started. On start, the module removes containers and volumes whose
+    /// <c>ministack.instance</c> label names a MiniStack container that no longer exists:
+    /// the host part is a 12-character container id, and no container with that id is left.
+    /// Instances whose host is not a container id, such as a MiniStack running directly on
+    /// the host machine, are never touched. Resources created in the last two minutes are
+    /// skipped, so a MiniStack that is still starting is not raced.
+    /// </remarks>
+    /// <param name="sweepOrphans"><c>true</c> to remove orphaned nested containers on start; otherwise, <c>false</c>.</param>
+    /// <returns>A configured instance of <see cref="MiniStackBuilder" />.</returns>
+    public MiniStackBuilder WithOrphanSweep(bool sweepOrphans)
+    {
+        return Merge(DockerResourceConfiguration, new MiniStackConfiguration(sweepOrphans: sweepOrphans));
+    }
+
+    /// <summary>
+    /// Limits the memory the MiniStack container can use.
+    /// </summary>
+    /// <remarks>
+    /// Sets <c>HostConfig.Memory</c> and <c>HostConfig.MemorySwap</c> to the same value, so
+    /// the container gets no swap on top of the limit. Without a limit, a runaway MiniStack can
+    /// exhaust the memory of the Docker host (or its VM). The limit covers only the MiniStack
+    /// container, not the containers it starts for real infrastructure. If MiniStack is
+    /// OOM-killed before it is ready, <c>StartAsync</c> throws an exception that says so.
+    /// </remarks>
+    /// <param name="bytes">The memory limit in bytes, e.g. <c>4L * 1024 * 1024 * 1024</c> for 4 GiB.</param>
+    /// <returns>A configured instance of <see cref="MiniStackBuilder" />.</returns>
+    public MiniStackBuilder WithMemoryLimit(long bytes)
+    {
+        return Merge(DockerResourceConfiguration, new MiniStackConfiguration(memoryLimit: bytes));
+    }
+
+    /// <summary>
     /// Limits MiniStack to the given AWS services.
     /// </summary>
     /// <remarks>
@@ -305,6 +343,16 @@ public sealed class MiniStackBuilder : ContainerBuilder<MiniStackBuilder, MiniSt
             miniStackBuilder = miniStackBuilder.WithBindMount(GetDockerSocketPath(DockerResourceConfiguration.DockerEndpointAuthConfig.Endpoint), DockerSocketFilePath, AccessMode.ReadWrite);
         }
 
+        if (DockerResourceConfiguration.MemoryLimit.HasValue)
+        {
+            var memoryLimit = DockerResourceConfiguration.MemoryLimit.Value;
+            miniStackBuilder = miniStackBuilder.WithCreateParameterModifier(parameters =>
+            {
+                parameters.HostConfig.Memory = memoryLimit;
+                parameters.HostConfig.MemorySwap = memoryLimit;
+            });
+        }
+
         return new MiniStackContainer(miniStackBuilder.DockerResourceConfiguration);
     }
 
@@ -323,6 +371,8 @@ public sealed class MiniStackBuilder : ContainerBuilder<MiniStackBuilder, MiniSt
 
         const string duplicateScriptMessage = "Two scripts of the same kind cannot have the same file name.";
 
+        const string memoryLimitMessage = "The memory limit must be greater than zero.";
+
         base.Validate();
 
         Predicate<string> isInvalidScriptFileName = value =>
@@ -335,6 +385,9 @@ public sealed class MiniStackBuilder : ContainerBuilder<MiniStackBuilder, MiniSt
 
         _ = Guard.Argument(DockerResourceConfiguration, "Credentials")
             .ThrowIf(argument => new[] { AccessKeyEnvVar, SecretKeyEnvVar }.Any(name => environments.TryGetValue(name, out var value) && string.IsNullOrWhiteSpace(value)), argument => new ArgumentException(credentialsMessage, argument.Name));
+
+        _ = Guard.Argument(DockerResourceConfiguration, "MemoryLimit")
+            .ThrowIf(argument => argument.Value.MemoryLimit <= 0, argument => new ArgumentOutOfRangeException(argument.Name, memoryLimitMessage));
 
         _ = Guard.Argument(DockerResourceConfiguration, "Services")
             .ThrowIf(argument => environments.TryGetValue(ServicesEnvVar, out var services) && services.Split(',').All(string.IsNullOrWhiteSpace), argument => new ArgumentException(servicesMessage, argument.Name));

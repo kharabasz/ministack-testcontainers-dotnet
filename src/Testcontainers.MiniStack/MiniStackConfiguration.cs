@@ -12,14 +12,20 @@ public sealed class MiniStackConfiguration : ContainerConfiguration
     /// <param name="readyScriptFilePaths">The host file paths of the ready scripts.</param>
     /// <param name="readyScriptContents">The file names and contents of the ready scripts.</param>
     /// <param name="realInfrastructure">A value indicating whether the Docker socket is mounted for real infrastructure.</param>
+    /// <param name="memoryLimit">The container memory limit in bytes, which is also the memory and swap limit.</param>
+    /// <param name="sweepOrphans">A value indicating whether nested containers of removed MiniStack containers are removed on start.</param>
     public MiniStackConfiguration(
         IEnumerable<string> initScriptFilePaths = null,
         IEnumerable<KeyValuePair<string, string>> initScriptContents = null,
         IEnumerable<string> readyScriptFilePaths = null,
         IEnumerable<KeyValuePair<string, string>> readyScriptContents = null,
-        bool? realInfrastructure = null)
+        bool? realInfrastructure = null,
+        long? memoryLimit = null,
+        bool? sweepOrphans = null)
     {
         RealInfrastructure = realInfrastructure;
+        MemoryLimit = memoryLimit;
+        SweepOrphans = sweepOrphans;
         InitScriptFilePaths = initScriptFilePaths;
         InitScriptContents = initScriptContents;
         ReadyScriptFilePaths = readyScriptFilePaths;
@@ -69,12 +75,27 @@ public sealed class MiniStackConfiguration : ContainerConfiguration
         ReadyScriptFilePaths = BuildConfiguration.Combine(oldValue.ReadyScriptFilePaths, newValue.ReadyScriptFilePaths);
         ReadyScriptContents = BuildConfiguration.Combine(oldValue.ReadyScriptContents, newValue.ReadyScriptContents);
         RealInfrastructure = BuildConfiguration.Combine(oldValue.RealInfrastructure, newValue.RealInfrastructure);
+        MemoryLimit = BuildConfiguration.Combine(oldValue.MemoryLimit, newValue.MemoryLimit);
+        SweepOrphans = BuildConfiguration.Combine(oldValue.SweepOrphans, newValue.SweepOrphans);
     }
 
     /// <summary>
     /// Gets a value indicating whether the Docker socket is mounted for real infrastructure.
     /// </summary>
     public bool? RealInfrastructure { get; }
+
+    /// <summary>
+    /// Gets the container memory limit in bytes, or <c>null</c> if the container has no limit.
+    /// </summary>
+    public long? MemoryLimit { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether nested containers of removed MiniStack containers are removed on start.
+    /// </summary>
+    /// <remarks>
+    /// <c>null</c> means enabled. The sweep runs only in real infrastructure mode.
+    /// </remarks>
+    public bool? SweepOrphans { get; }
 
     /// <summary>
     /// Gets the host file paths of the boot scripts.

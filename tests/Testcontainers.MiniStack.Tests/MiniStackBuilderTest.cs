@@ -72,4 +72,57 @@ public sealed class MiniStackBuilderTest
         var miniStackBuilder = new MiniStackBuilder(TestSession.GetImageFromDockerfile()).WithInitScriptContent("01.sh", string.Empty).WithReadyScriptContent("01.sh", string.Empty);
         _ = miniStackBuilder.Build();
     }
+
+    [Theory]
+    [Trait(nameof(DockerCli.DockerPlatform), nameof(DockerCli.DockerPlatform.Linux))]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void ThrowsArgumentOutOfRangeExceptionWhenMemoryLimitIsNotPositive(long memoryLimit)
+    {
+        var miniStackBuilder = new MiniStackBuilder(TestSession.GetImageFromDockerfile()).WithMemoryLimit(memoryLimit);
+        Assert.Throws<ArgumentOutOfRangeException>(miniStackBuilder.Build);
+    }
+
+    [Fact]
+    [Trait(nameof(DockerCli.DockerPlatform), nameof(DockerCli.DockerPlatform.Linux))]
+    public async Task MemoryLimitIsSetWithoutSwap()
+    {
+        // Given
+        const long memoryLimit = 512L * 1024 * 1024;
+
+        using var dockerClient = TestcontainersSettings.OS.DockerEndpointAuthConfig.GetDockerClientBuilder(Guid.Empty).Build();
+
+        await using var miniStackContainer = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
+            .WithMemoryLimit(memoryLimit)
+            .Build();
+
+        // When
+        await miniStackContainer.StartAsync(TestContext.Current.CancellationToken)
+            .ConfigureAwait(true);
+
+        var containerInspectResponse = await dockerClient.Containers.InspectContainerAsync(miniStackContainer.Id, TestContext.Current.CancellationToken)
+            .ConfigureAwait(true);
+
+        // Then
+        Assert.Equal(memoryLimit, containerInspectResponse.HostConfig.Memory);
+        Assert.Equal(memoryLimit, containerInspectResponse.HostConfig.MemorySwap);
+    }
+
+    [Fact]
+    [Trait(nameof(DockerCli.DockerPlatform), nameof(DockerCli.DockerPlatform.Linux))]
+    public async Task StartThrowsDescriptiveExceptionWhenOomKilled()
+    {
+        // Given
+        await using var miniStackContainer = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
+            .WithMemoryLimit(16L * 1024 * 1024)
+            .Build();
+
+        // When
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => miniStackContainer.StartAsync(TestContext.Current.CancellationToken))
+            .ConfigureAwait(true);
+
+        // Then
+        Assert.Equal("MiniStack was OOM-killed (memory limit 16 MiB).", exception.Message);
+        Assert.NotNull(exception.InnerException);
+    }
 }
