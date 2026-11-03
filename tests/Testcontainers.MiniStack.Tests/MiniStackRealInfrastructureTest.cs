@@ -193,6 +193,160 @@ public sealed class MiniStackRealInfrastructureTest : IAsyncLifetime
         }
     }
 
+    [Fact]
+    [Trait(nameof(DockerCli.DockerPlatform), nameof(DockerCli.DockerPlatform.Linux))]
+    public async Task StartRemovesOnlyNestedResourcesOfRemovedInstances()
+    {
+        // Given
+        using var dockerClient = TestcontainersSettings.OS.DockerEndpointAuthConfig.GetDockerClientBuilder(Guid.Empty).Build();
+
+        // Stands in for a MiniStack container that the Resource Reaper removed after the test host died.
+        var removedInstance = await CreateContainerAsync(dockerClient, new Dictionary<string, string>())
+            .ConfigureAwait(true);
+
+        await dockerClient.Containers.RemoveContainerAsync(removedInstance, new ContainerRemoveParameters { Force = true }, TestContext.Current.CancellationToken)
+            .ConfigureAwait(true);
+
+        // Stands in for a MiniStack container that still exists.
+        var existingInstance = await CreateContainerAsync(dockerClient, new Dictionary<string, string>())
+            .ConfigureAwait(true);
+
+        var orphanedInstanceId = removedInstance.Substring(0, 12) + ":4566";
+
+        var orphanedContainer = await CreateContainerAsync(dockerClient, new Dictionary<string, string> { { "ministack", "lambda" }, { InstanceLabel, orphanedInstanceId } })
+            .ConfigureAwait(true);
+
+        var existingInstanceContainer = await CreateContainerAsync(dockerClient, new Dictionary<string, string> { { "ministack", "lambda" }, { InstanceLabel, existingInstance.Substring(0, 12) + ":4566" } })
+            .ConfigureAwait(true);
+
+        // A MiniStack running on the host machine labels its containers with the machine name.
+        var hostInstanceContainer = await CreateContainerAsync(dockerClient, new Dictionary<string, string> { { "ministack", "lambda" }, { InstanceLabel, "ministack-host:4566" } })
+            .ConfigureAwait(true);
+
+        var orphanedVolume = await dockerClient.Volumes.CreateAsync(new VolumesCreateParameters { Name = Guid.NewGuid().ToString("N"), Labels = new Dictionary<string, string> { { InstanceLabel, orphanedInstanceId } } }, TestContext.Current.CancellationToken)
+            .ConfigureAwait(true);
+
+        var miniStackContainer = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
+            .WithRealInfrastructure()
+            .Build();
+
+        miniStackContainer.OrphanGracePeriod = TimeSpan.Zero;
+
+        try
+        {
+            // When
+            await miniStackContainer.StartAsync(TestContext.Current.CancellationToken)
+                .ConfigureAwait(true);
+
+            // Then
+            Assert.False(await ContainerExistsAsync(dockerClient, orphanedContainer).ConfigureAwait(true));
+            Assert.False(await VolumeExistsAsync(dockerClient, orphanedVolume.Name).ConfigureAwait(true));
+            Assert.True(await ContainerExistsAsync(dockerClient, existingInstanceContainer).ConfigureAwait(true));
+            Assert.True(await ContainerExistsAsync(dockerClient, hostInstanceContainer).ConfigureAwait(true));
+        }
+        finally
+        {
+            await miniStackContainer.DisposeAsync()
+                .ConfigureAwait(true);
+
+            foreach (var id in new[] { orphanedContainer, existingInstanceContainer, hostInstanceContainer, existingInstance })
+            {
+                await RemoveContainerIfExistsAsync(dockerClient, id)
+                    .ConfigureAwait(true);
+            }
+
+            if (await VolumeExistsAsync(dockerClient, orphanedVolume.Name).ConfigureAwait(true))
+            {
+                await dockerClient.Volumes.RemoveAsync(orphanedVolume.Name, null, TestContext.Current.CancellationToken)
+                    .ConfigureAwait(true);
+            }
+        }
+    }
+
+    [Theory]
+    [Trait(nameof(DockerCli.DockerPlatform), nameof(DockerCli.DockerPlatform.Linux))]
+    [InlineData(true, 120)]
+    [InlineData(false, 0)]
+    public async Task StartKeepsOrphanWhenTooYoungOrSweepIsDisabled(bool sweepOrphans, int gracePeriodSeconds)
+    {
+        // Given
+        using var dockerClient = TestcontainersSettings.OS.DockerEndpointAuthConfig.GetDockerClientBuilder(Guid.Empty).Build();
+
+        var removedInstance = await CreateContainerAsync(dockerClient, new Dictionary<string, string>())
+            .ConfigureAwait(true);
+
+        await dockerClient.Containers.RemoveContainerAsync(removedInstance, new ContainerRemoveParameters { Force = true }, TestContext.Current.CancellationToken)
+            .ConfigureAwait(true);
+
+        var orphanedContainer = await CreateContainerAsync(dockerClient, new Dictionary<string, string> { { "ministack", "lambda" }, { InstanceLabel, removedInstance.Substring(0, 12) + ":4566" } })
+            .ConfigureAwait(true);
+
+        var miniStackContainer = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
+            .WithRealInfrastructure()
+            .WithOrphanSweep(sweepOrphans)
+            .Build();
+
+        miniStackContainer.OrphanGracePeriod = TimeSpan.FromSeconds(gracePeriodSeconds);
+
+        try
+        {
+            // When
+            await miniStackContainer.StartAsync(TestContext.Current.CancellationToken)
+                .ConfigureAwait(true);
+
+            // Then
+            Assert.True(await ContainerExistsAsync(dockerClient, orphanedContainer).ConfigureAwait(true));
+        }
+        finally
+        {
+            await miniStackContainer.DisposeAsync()
+                .ConfigureAwait(true);
+
+            await RemoveContainerIfExistsAsync(dockerClient, orphanedContainer)
+                .ConfigureAwait(true);
+        }
+    }
+
+    private static async Task<string> CreateContainerAsync(Docker.DotNet.IDockerClient dockerClient, IDictionary<string, string> labels)
+    {
+        var createContainerResponse = await dockerClient.Containers.CreateContainerAsync(new CreateContainerParameters
+        {
+            Image = TestSession.GetImageFromDockerfile(),
+            Entrypoint = new[] { "sleep", "300" },
+            Labels = labels,
+        }, TestContext.Current.CancellationToken)
+            .ConfigureAwait(false);
+
+        return createContainerResponse.ID;
+    }
+
+    private static async Task<bool> ContainerExistsAsync(Docker.DotNet.IDockerClient dockerClient, string id)
+    {
+        var filters = new Dictionary<string, IDictionary<string, bool>> { { "id", new Dictionary<string, bool> { { id, true } } } };
+        var containers = await dockerClient.Containers.ListContainersAsync(new ContainersListParameters { All = true, Filters = filters }, TestContext.Current.CancellationToken)
+            .ConfigureAwait(false);
+
+        return containers.Any(container => id.Equals(container.ID, StringComparison.Ordinal));
+    }
+
+    private static async Task<bool> VolumeExistsAsync(Docker.DotNet.IDockerClient dockerClient, string name)
+    {
+        var filters = new Dictionary<string, IDictionary<string, bool>> { { "name", new Dictionary<string, bool> { { name, true } } } };
+        var volumes = await dockerClient.Volumes.ListAsync(new VolumesListParameters { Filters = filters }, TestContext.Current.CancellationToken)
+            .ConfigureAwait(false);
+
+        return (volumes.Volumes ?? new List<VolumeResponse>()).Any(volume => name.Equals(volume.Name, StringComparison.Ordinal));
+    }
+
+    private static async Task RemoveContainerIfExistsAsync(Docker.DotNet.IDockerClient dockerClient, string id)
+    {
+        if (await ContainerExistsAsync(dockerClient, id).ConfigureAwait(false))
+        {
+            await dockerClient.Containers.RemoveContainerAsync(id, new ContainerRemoveParameters { Force = true }, TestContext.Current.CancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
     private static Task<IList<ContainerListResponse>> ListContainersAsync(Docker.DotNet.IDockerClient dockerClient, string instanceId)
     {
         var filters = new Dictionary<string, IDictionary<string, bool>> { { "label", new Dictionary<string, bool> { { InstanceLabel + "=" + instanceId, true } } } };

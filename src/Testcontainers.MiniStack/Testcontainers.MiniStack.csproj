@@ -9,6 +9,7 @@
     <ItemGroup>
         <PackageReference Include="Testcontainers"/>
         <PackageReference Include="JetBrains.Annotations" PrivateAssets="All"/>
+        <InternalsVisibleTo Include="Testcontainers.MiniStack.Tests"/>
     </ItemGroup>
     <ItemGroup>
         <None Include="../../README.md" Visible="false" Pack="true" PackagePath=""/>

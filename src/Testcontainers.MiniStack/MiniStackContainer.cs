@@ -8,6 +8,10 @@ public sealed class MiniStackContainer : DockerContainer
 
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromMinutes(1);
 
+    private static readonly TimeSpan InspectTimeout = TimeSpan.FromSeconds(10);
+
+    private static readonly Regex ContainerIdHost = new Regex("^[0-9a-f]{12}$", RegexOptions.CultureInvariant);
+
     private static readonly HttpClient HttpClient = new HttpClient();
 
     private readonly MiniStackConfiguration _configuration;
@@ -104,9 +108,24 @@ public sealed class MiniStackContainer : DockerContainer
         return health.RootElement.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String ? version.GetString() : null;
     }
 
+    /// <summary>
+    /// Gets or sets how old a nested container or volume must be before the orphan sweep removes it.
+    /// </summary>
+    /// <remarks>
+    /// A MiniStack container that is still being created can already own nested containers.
+    /// Tests lower the grace period so they do not have to wait for it.
+    /// </remarks>
+    internal TimeSpan OrphanGracePeriod { get; set; } = TimeSpan.FromMinutes(2);
+
     /// <inheritdoc />
     protected override async Task UnsafeStartContainerAsync(CancellationToken ct = default)
     {
+        if (true.Equals(_configuration.RealInfrastructure) && !false.Equals(_configuration.SweepOrphans))
+        {
+            await SweepOrphanedResourcesAsync(ct)
+                .ConfigureAwait(false);
+        }
+
         await base.UnsafeStartContainerAsync(ct)
             .ConfigureAwait(false);
 
@@ -119,8 +138,18 @@ public sealed class MiniStackContainer : DockerContainer
     /// <inheritdoc />
     protected override async Task UnsafeStartAsync(CancellationToken ct = default)
     {
-        await base.UnsafeStartAsync(ct)
-            .ConfigureAwait(false);
+        try
+        {
+            await base.UnsafeStartAsync(ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            await ThrowIfOomKilledAsync(e)
+                .ConfigureAwait(false);
+
+            throw;
+        }
 
         await ThrowIfReadyScriptsFailedAsync(ct)
             .ConfigureAwait(false);
@@ -184,6 +213,66 @@ public sealed class MiniStackContainer : DockerContainer
     }
 
     /// <summary>
+    /// Throws a descriptive exception if Docker reports that the container was OOM-killed.
+    /// </summary>
+    /// <remarks>
+    /// A MiniStack that runs out of memory otherwise surfaces as a wait strategy timeout or a
+    /// bare exit code 137. The inspect is best-effort: if it fails, the original exception stands.
+    /// </remarks>
+    /// <param name="startException">The exception the start failed with.</param>
+    private async Task ThrowIfOomKilledAsync(Exception startException)
+    {
+        if (string.IsNullOrEmpty(Id))
+        {
+            return;
+        }
+
+        bool oomKilled;
+        try
+        {
+            // The start token may be what failed the start, so the inspect gets its own.
+            using var cts = new CancellationTokenSource(InspectTimeout);
+            using var client = CreateDockerClient();
+            var inspect = await client.Containers.InspectContainerAsync(Id, cts.Token)
+                .ConfigureAwait(false);
+            oomKilled = inspect.State?.OOMKilled ?? false;
+        }
+        catch (Exception e)
+        {
+            Logger.LogDebug(e, "Could not inspect MiniStack container {Id} for an OOM kill", Id);
+            return;
+        }
+
+        if (!oomKilled)
+        {
+            return;
+        }
+
+        var memoryLimit = _configuration.MemoryLimit;
+        var reason = memoryLimit.HasValue ? "memory limit " + FormatBytes(memoryLimit.Value) : "no memory limit set, so the Docker host ran out of memory";
+        throw new InvalidOperationException($"MiniStack was OOM-killed ({reason}).", startException);
+    }
+
+    /// <summary>
+    /// Formats a byte count in the largest binary unit that divides it, e.g. <c>4 GiB</c>.
+    /// </summary>
+    /// <param name="bytes">The byte count.</param>
+    /// <returns>The formatted byte count.</returns>
+    private static string FormatBytes(long bytes)
+    {
+        var units = new[] { "bytes", "KiB", "MiB", "GiB", "TiB" };
+
+        var unit = 0;
+        while (unit < units.Length - 1 && bytes % 1024 == 0)
+        {
+            bytes /= 1024;
+            unit++;
+        }
+
+        return bytes.ToString(CultureInfo.InvariantCulture) + " " + units[unit];
+    }
+
+    /// <summary>
     /// Gets a configured environment variable, or the default if it is unset or empty.
     /// </summary>
     /// <param name="name">The environment variable name.</param>
@@ -228,6 +317,132 @@ public sealed class MiniStackContainer : DockerContainer
             Logger.LogWarning(e, "Could not resolve the MiniStack instance id; nested containers will not be removed");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Removes the nested containers and volumes of MiniStack containers that no longer exist.
+    /// </summary>
+    /// <remarks>
+    /// When the test host is killed, the Resource Reaper removes MiniStack but not the
+    /// containers MiniStack started, because they carry no Testcontainers session label.
+    /// A <c>ministack.instance</c> label of <c>{host}:{port}</c> is orphaned only if
+    /// <c>{host}</c> is a 12-character container id (the default container hostname) and no
+    /// container with that id exists. Other hosts, such as a MiniStack running on the host
+    /// machine, are never touched, and neither is anything younger than
+    /// <see cref="OrphanGracePeriod" />. Like <see cref="ReapMiniStackResourcesAsync" />, the
+    /// sweep is best-effort and bounded by a timeout.
+    /// </remarks>
+    private async Task SweepOrphanedResourcesAsync(CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(CleanupTimeout);
+
+        var cutoff = DateTime.UtcNow - OrphanGracePeriod;
+
+        Docker.DotNet.IDockerClient client;
+        try
+        {
+            client = CreateDockerClient();
+        }
+        catch (Exception e)
+        {
+            Logger.LogWarning(e, "MiniStack orphan sweep skipped, Docker client unavailable");
+            return;
+        }
+
+        using (client)
+        {
+            ISet<string> containerIds;
+            try
+            {
+                // Lists every container, so a MiniStack that is stopped but not removed still counts as alive.
+                var containers = await client.Containers.ListContainersAsync(new ContainersListParameters { All = true }, cts.Token)
+                    .ConfigureAwait(false);
+
+                containerIds = new HashSet<string>(containers.Select(container => container.ID.Substring(0, Math.Min(12, container.ID.Length))), StringComparer.Ordinal);
+
+                var orphans = containers
+                    .Where(container => IsOrphaned(container.Labels, container.Created.ToUniversalTime(), cutoff, containerIds))
+                    .ToList();
+
+                foreach (var orphan in orphans)
+                {
+                    try
+                    {
+                        await client.Containers.RemoveContainerAsync(orphan.ID, new ContainerRemoveParameters { Force = true, RemoveVolumes = true }, cts.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogWarning(e, "Failed to remove orphaned MiniStack container {Id}", orphan.ID);
+                    }
+                }
+
+                if (orphans.Count > 0)
+                {
+                    Logger.LogInformation("Removed {Count} orphaned MiniStack container(s) of {Instances}", orphans.Count, string.Join(", ", orphans.Select(orphan => orphan.Labels[InstanceLabel]).Distinct()));
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning(e, "Failed to list containers for the MiniStack orphan sweep");
+                return;
+            }
+
+            try
+            {
+                var labelFilter = new Dictionary<string, IDictionary<string, bool>>
+                {
+                    ["label"] = new Dictionary<string, bool> { [InstanceLabel] = true },
+                };
+
+                var volumes = await client.Volumes.ListAsync(new VolumesListParameters { Filters = labelFilter }, cts.Token)
+                    .ConfigureAwait(false);
+
+                // A volume whose creation time cannot be parsed is kept.
+                var orphans = (volumes.Volumes ?? new List<VolumeResponse>())
+                    .Where(volume => DateTimeOffset.TryParse(volume.CreatedAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var createdAt)
+                        && IsOrphaned(volume.Labels, createdAt.UtcDateTime, cutoff, containerIds))
+                    .ToList();
+
+                foreach (var volume in orphans)
+                {
+                    try
+                    {
+                        await client.Volumes.RemoveAsync(volume.Name, null, cts.Token)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogDebug(e, "Failed to remove orphaned MiniStack volume {Name}", volume.Name);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning(e, "Failed to list volumes for the MiniStack orphan sweep");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Decides whether a labelled container or volume belongs to a MiniStack container that no longer exists.
+    /// </summary>
+    /// <param name="labels">The labels of the container or volume.</param>
+    /// <param name="createdAt">The creation time in UTC.</param>
+    /// <param name="cutoff">The latest creation time in UTC that is old enough to remove.</param>
+    /// <param name="containerIds">The 12-character ids of all existing containers.</param>
+    /// <returns><c>true</c> if the container or volume can be removed; otherwise, <c>false</c>.</returns>
+    private static bool IsOrphaned(IDictionary<string, string> labels, DateTime createdAt, DateTime cutoff, ISet<string> containerIds)
+    {
+        if (labels == null || !labels.TryGetValue(InstanceLabel, out var instanceId) || createdAt >= cutoff)
+        {
+            return false;
+        }
+
+        var separator = instanceId.LastIndexOf(':');
+        var host = separator < 0 ? instanceId : instanceId.Substring(0, separator);
+        return ContainerIdHost.IsMatch(host) && !containerIds.Contains(host);
     }
 
     /// <summary>

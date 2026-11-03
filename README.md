@@ -56,8 +56,23 @@ var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
 - `WithPersistence()` sets `PERSIST_STATE=1` and `S3_PERSIST=1`, so service state and S3 objects are written to disk and survive a restart of the same container.
 - `WithImdsV2Required()` sets `MINISTACK_IMDS_V2_REQUIRED=1`, so instance metadata requests without a session token are rejected.
 - `WithServices(params string[])` sets `SERVICES`, so MiniStack loads only the listed services, e.g. `WithServices("s3", "sqs")`.
+- `WithMemoryLimit(long)` limits the MiniStack container's memory, in bytes. See [Memory limit](#memory-limit).
 
 `GetMiniStackVersion()` returns the image tag, or `null` for an image referenced only by digest. `GetMiniStackVersionAsync()` returns the version the running server reports, which also resolves tags such as `latest`.
+
+## Memory limit
+
+By default, the MiniStack container has no memory limit, so a runaway MiniStack can use up the memory of the Docker host, or of the VM that runs Docker on macOS and Windows. `WithMemoryLimit(long)` sets a limit in bytes:
+
+```csharp
+var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
+    .WithMemoryLimit(4L * 1024 * 1024 * 1024)
+    .Build();
+```
+
+It sets `HostConfig.Memory` and `HostConfig.MemorySwap` to the same value, so the container gets no swap on top of the limit. The value must be greater than zero. The limit applies to the MiniStack container only, not to the containers it starts for real infrastructure.
+
+If the container is OOM-killed before it is ready, `StartAsync` throws an `InvalidOperationException` with a message such as `MiniStack was OOM-killed (memory limit 4 GiB).`, instead of a wait strategy timeout or a bare exit code 137.
 
 If Testcontainers is configured with a hub image name prefix, the module passes it to MiniStack as `MINISTACK_IMAGE_PREFIX`, so the images MiniStack pulls for real infrastructure come from the same registry.
 
@@ -93,7 +108,11 @@ By default, RDS reports the database container's address on the Docker network, 
 > [!WARNING]
 > Anything running inside MiniStack, including the code of a Lambda function, gets full control over the host's container engine. Use real infrastructure only on trusted machines and CI runners.
 
+A long-running MiniStack with real infrastructure can grow large. Consider a [memory limit](#memory-limit), so that MiniStack is OOM-killed on its own instead of taking the Docker host or VM down with it.
+
 The Resource Reaper does not know about the containers MiniStack starts. When MiniStack is stopped, it removes them itself. Disposing the container kills MiniStack before it can do that, so the module then removes the containers and volumes that carry its `ministack.instance` label. MiniStack builds that label from `MINISTACK_HOSTNAME` (or the container hostname) and the gateway port. Containers of another MiniStack instance on the same Docker daemon are left alone, unless both instances set the same `MINISTACK_HOSTNAME` and port.
+
+If the test host is killed, the module cannot clean up. The Resource Reaper still removes the MiniStack container, but the containers MiniStack started keep running. So when a container with real infrastructure starts, the module first removes the containers and volumes whose `ministack.instance` label is `<host>:<port>`, where `<host>` is a 12-character container id (the default container hostname) and no container with that id exists any more. A MiniStack container that is stopped but not removed still counts as existing. Labels whose host is not a container id, such as those of a MiniStack running directly on the host machine or one with `MINISTACK_HOSTNAME` set to a name, are never touched. Resources created in the last two minutes are skipped, so a MiniStack that is still starting is not raced. The sweep is best-effort and bounded by a one-minute timeout: failures are logged, and the start goes on. To turn it off, use `WithOrphanSweep(false)`.
 
 ## Build and test
 
