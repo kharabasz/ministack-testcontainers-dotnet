@@ -63,7 +63,7 @@ public sealed class MiniStackBuilder : ContainerBuilder<MiniStackBuilder, MiniSt
     /// </summary>
     /// <param name="image">
     /// The full Docker image name, including the image repository and tag
-    /// (e.g., <c>ministackorg/ministack:1.5.31</c>).
+    /// (e.g., <c>ministackorg/ministack:1.5.37</c>).
     /// </param>
     /// <remarks>
     /// Docker image tags available at <see href="https://hub.docker.com/r/ministackorg/ministack/tags" />.
@@ -187,16 +187,21 @@ public sealed class MiniStackBuilder : ContainerBuilder<MiniStackBuilder, MiniSt
     /// that removed MiniStack containers left behind.
     /// </summary>
     /// <remarks>
-    /// Enabled by default, and runs only with <see cref="WithRealInfrastructure" />. When the
-    /// test host is killed, the Resource Reaper removes MiniStack, but not the containers
-    /// MiniStack started. On start, the module removes containers and volumes whose
+    /// Runs only with <see cref="WithRealInfrastructure" />. When the test host is killed, the
+    /// Resource Reaper removes MiniStack. MiniStack 1.5.37 and later label the containers it
+    /// starts with the same session, so the Resource Reaper removes them too. By default, the
+    /// sweep therefore runs only when the Resource Reaper does not cover this container: it is
+    /// disabled (<c>TESTCONTAINERS_RYUK_DISABLED</c>), or the container uses
+    /// <c>WithCleanUp(false)</c> or its own session. Pass <c>true</c> to sweep on every start,
+    /// for MiniStack images older than 1.5.37, or <c>false</c> to never sweep.
+    /// On start, the module removes containers and volumes whose
     /// <c>ministack.instance</c> label names a MiniStack container that no longer exists:
     /// the host part is a 12-character container id, and no container with that id is left.
     /// Instances whose host is not a container id, such as a MiniStack running directly on
     /// the host machine, are never touched. Resources created in the last two minutes are
     /// skipped, so a MiniStack that is still starting is not raced.
     /// </remarks>
-    /// <param name="sweepOrphans"><c>true</c> to remove orphaned nested containers on start; otherwise, <c>false</c>.</param>
+    /// <param name="sweepOrphans"><c>true</c> to always remove orphaned nested containers on start; <c>false</c> to never remove them.</param>
     /// <returns>A configured instance of <see cref="MiniStackBuilder" />.</returns>
     public MiniStackBuilder WithOrphanSweep(bool sweepOrphans)
     {

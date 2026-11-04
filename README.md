@@ -17,7 +17,7 @@ The package targets `net8.0`, `net9.0`, `net10.0`, `netstandard2.0` and `netstan
 ```csharp
 using Testcontainers.MiniStack;
 
-var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
+var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.37")
     .Build();
 
 await miniStackContainer.StartAsync();
@@ -43,7 +43,7 @@ The container is ready once `/_ministack/health` returns HTTP 200 and then `/_mi
 The builder sets MiniStack's environment variables for the most common options:
 
 ```csharp
-var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
+var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.37")
     .WithRegion("eu-west-1")
     .WithCredentials("123456789012", "secret")
     .WithPersistence()
@@ -65,7 +65,7 @@ var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
 By default, the MiniStack container has no memory limit, so a runaway MiniStack can use up the memory of the Docker host, or of the VM that runs Docker on macOS and Windows. `WithMemoryLimit(long)` sets a limit in bytes:
 
 ```csharp
-var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
+var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.37")
     .WithMemoryLimit(4L * 1024 * 1024 * 1024)
     .Build();
 ```
@@ -81,7 +81,7 @@ If Testcontainers is configured with a hub image name prefix, the module passes 
 MiniStack runs shell (`.sh`) and Python (`.py`) scripts in alphabetical order of their file names. Use `WithInitScript(string)` or `WithInitScriptContent(string, string)` for boot scripts, which run before MiniStack serves requests. Use `WithReadyScript(string)` or `WithReadyScriptContent(string, string)` for ready scripts, which run once MiniStack serves requests and can create AWS resources:
 
 ```csharp
-var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
+var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.37")
     .WithInitScriptContent("01-boot.sh", "echo booted > /tmp/booted")
     .WithReadyScriptContent("01-create-bucket.sh", "aws s3 mb s3://seeded-bucket")
     .WithReadyScript("02-create-queue.py")
@@ -97,7 +97,7 @@ Older MiniStack images have no `/_ministack/ready` endpoint and return HTTP 404.
 `WithRealInfrastructure()` bind-mounts the Docker socket into the container. It uses the same socket path as the Resource Reaper, including the `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` setting. MiniStack then runs real containers for services such as RDS, ElastiCache, ECS and Lambda:
 
 ```csharp
-var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.31")
+var miniStackContainer = new MiniStackBuilder("ministackorg/ministack:1.5.37")
     .WithRealInfrastructure()
     .WithRdsPublicEndpoint()
     .Build();
@@ -112,7 +112,7 @@ A long-running MiniStack with real infrastructure can grow large. Consider a [me
 
 The Resource Reaper does not know about the containers MiniStack starts. When MiniStack is stopped, it removes them itself. Disposing the container kills MiniStack before it can do that, so the module then removes the containers and volumes that carry its `ministack.instance` label. MiniStack builds that label from `MINISTACK_HOSTNAME` (or the container hostname) and the gateway port. Containers of another MiniStack instance on the same Docker daemon are left alone, unless both instances set the same `MINISTACK_HOSTNAME` and port.
 
-If the test host is killed, the module cannot clean up. The Resource Reaper still removes the MiniStack container, but the containers MiniStack started keep running. So when a container with real infrastructure starts, the module first removes the containers and volumes whose `ministack.instance` label is `<host>:<port>`, where `<host>` is a 12-character container id (the default container hostname) and no container with that id exists any more. A MiniStack container that is stopped but not removed still counts as existing. Labels whose host is not a container id, such as those of a MiniStack running directly on the host machine or one with `MINISTACK_HOSTNAME` set to a name, are never touched. Resources created in the last two minutes are skipped, so a MiniStack that is still starting is not raced. The sweep is best-effort and bounded by a one-minute timeout: failures are logged, and the start goes on. To turn it off, use `WithOrphanSweep(false)`.
+If the test host is killed, the module cannot clean up. The Resource Reaper still removes the MiniStack container, and MiniStack 1.5.37 and later label the containers they start with the same Resource Reaper session, so it removes those too. The module therefore sweeps for orphans only when the Resource Reaper does not cover the container: it is disabled (`TESTCONTAINERS_RYUK_DISABLED=true`), or the container uses `WithCleanUp(false)` or its own session. The sweep removes the containers and volumes whose `ministack.instance` label is `<host>:<port>`, where `<host>` is a 12-character container id (the default container hostname) and no container with that id exists any more. A MiniStack container that is stopped but not removed still counts as existing. Labels whose host is not a container id, such as those of a MiniStack running directly on the host machine or one with `MINISTACK_HOSTNAME` set to a name, are never touched. Resources created in the last two minutes are skipped, so a MiniStack that is still starting is not raced. The sweep is best-effort and bounded by a one-minute timeout: failures are logged, and the start goes on. Use `WithOrphanSweep(true)` to sweep on every start, for MiniStack images older than 1.5.37, or `WithOrphanSweep(false)` to never sweep.
 
 ## Build and test
 
