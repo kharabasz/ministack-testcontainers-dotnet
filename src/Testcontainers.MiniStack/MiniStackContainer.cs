@@ -120,7 +120,7 @@ public sealed class MiniStackContainer : DockerContainer
     /// <inheritdoc />
     protected override async Task UnsafeStartContainerAsync(CancellationToken ct = default)
     {
-        if (true.Equals(_configuration.RealInfrastructure) && !false.Equals(_configuration.SweepOrphans))
+        if (true.Equals(_configuration.RealInfrastructure) && (_configuration.SweepOrphans ?? !IsReapedByResourceReaper()))
         {
             await SweepOrphanedResourcesAsync(ct)
                 .ConfigureAwait(false);
@@ -293,6 +293,20 @@ public sealed class MiniStackContainer : DockerContainer
     }
 
     /// <summary>
+    /// Gets a value indicating whether the Resource Reaper removes this container when the test host dies.
+    /// </summary>
+    /// <remarks>
+    /// The same check Testcontainers makes before it starts the Resource Reaper. MiniStack 1.5.37 and
+    /// later copy this container's session label onto every container it starts, so the Resource
+    /// Reaper then removes those too, and the start-time orphan sweep is not needed.
+    /// </remarks>
+    /// <returns><c>true</c> if the Resource Reaper is enabled and the container uses its default session; otherwise, <c>false</c>.</returns>
+    private bool IsReapedByResourceReaper()
+    {
+        return TestcontainersSettings.ResourceReaperEnabled && ResourceReaper.DefaultSessionId.Equals(_configuration.SessionId);
+    }
+
+    /// <summary>
     /// Works out the <c>ministack.instance</c> label value MiniStack stamps on every
     /// container it spawns: <c>{MINISTACK_HOSTNAME or container hostname}:{GATEWAY_PORT or EDGE_PORT or 4566}</c>.
     /// </summary>
@@ -323,8 +337,10 @@ public sealed class MiniStackContainer : DockerContainer
     /// Removes the nested containers and volumes of MiniStack containers that no longer exist.
     /// </summary>
     /// <remarks>
-    /// When the test host is killed, the Resource Reaper removes MiniStack but not the
-    /// containers MiniStack started, because they carry no Testcontainers session label.
+    /// When the test host is killed and the Resource Reaper does not cover this container (see
+    /// <see cref="IsReapedByResourceReaper" />), nothing removes the containers MiniStack
+    /// started. MiniStack images older than 1.5.37 also give them no Testcontainers session
+    /// label, so even the Resource Reaper leaves them behind.
     /// A <c>ministack.instance</c> label of <c>{host}:{port}</c> is orphaned only if
     /// <c>{host}</c> is a 12-character container id (the default container hostname) and no
     /// container with that id exists. Other hosts, such as a MiniStack running on the host

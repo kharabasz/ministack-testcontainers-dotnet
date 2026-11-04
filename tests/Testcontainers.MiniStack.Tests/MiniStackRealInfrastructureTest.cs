@@ -226,8 +226,10 @@ public sealed class MiniStackRealInfrastructureTest : IAsyncLifetime
         var orphanedVolume = await dockerClient.Volumes.CreateAsync(new VolumesCreateParameters { Name = Guid.NewGuid().ToString("N"), Labels = new Dictionary<string, string> { { InstanceLabel, orphanedInstanceId } } }, TestContext.Current.CancellationToken)
             .ConfigureAwait(true);
 
+        // Without the Resource Reaper session, the default sweeps: nothing else would remove the orphans.
         var miniStackContainer = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
             .WithRealInfrastructure()
+            .WithCleanUp(false)
             .Build();
 
         miniStackContainer.OrphanGracePeriod = TimeSpan.Zero;
@@ -267,8 +269,12 @@ public sealed class MiniStackRealInfrastructureTest : IAsyncLifetime
     [Trait(nameof(DockerCli.DockerPlatform), nameof(DockerCli.DockerPlatform.Linux))]
     [InlineData(true, 120)]
     [InlineData(false, 0)]
-    public async Task StartKeepsOrphanWhenTooYoungOrSweepIsDisabled(bool sweepOrphans, int gracePeriodSeconds)
+    [InlineData(null, 0)]
+    public async Task StartKeepsOrphanWhenTooYoungDisabledOrReaped(bool? sweepOrphans, int gracePeriodSeconds)
     {
+        // By default, the Resource Reaper removes the nested containers of MiniStack 1.5.37 and later, so the sweep is skipped.
+        Assert.SkipWhen(sweepOrphans == null && !TestcontainersSettings.ResourceReaperEnabled, "The Resource Reaper is disabled, so the default sweeps.");
+
         // Given
         using var dockerClient = TestcontainersSettings.OS.DockerEndpointAuthConfig.GetDockerClientBuilder(Guid.Empty).Build();
 
@@ -281,10 +287,15 @@ public sealed class MiniStackRealInfrastructureTest : IAsyncLifetime
         var orphanedContainer = await CreateContainerAsync(dockerClient, new Dictionary<string, string> { { "ministack", "lambda" }, { InstanceLabel, removedInstance.Substring(0, 12) + ":4566" } })
             .ConfigureAwait(true);
 
-        var miniStackContainer = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
-            .WithRealInfrastructure()
-            .WithOrphanSweep(sweepOrphans)
-            .Build();
+        var miniStackBuilder = new MiniStackBuilder(TestSession.GetImageFromDockerfile())
+            .WithRealInfrastructure();
+
+        if (sweepOrphans.HasValue)
+        {
+            miniStackBuilder = miniStackBuilder.WithOrphanSweep(sweepOrphans.Value);
+        }
+
+        var miniStackContainer = miniStackBuilder.Build();
 
         miniStackContainer.OrphanGracePeriod = TimeSpan.FromSeconds(gracePeriodSeconds);
 

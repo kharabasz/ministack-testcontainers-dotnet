@@ -93,7 +93,8 @@ public sealed class MiniStackConfiguration : ContainerConfiguration
     /// Gets a value indicating whether nested containers of removed MiniStack containers are removed on start.
     /// </summary>
     /// <remarks>
-    /// <c>null</c> means enabled. The sweep runs only in real infrastructure mode.
+    /// <c>null</c> means only when the Resource Reaper does not remove this container. The sweep
+    /// runs only in real infrastructure mode.
     /// </remarks>
     public bool? SweepOrphans { get; }
 
